@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"k8s.io/client-go/tools/clientcmd/api"
 	"strings"
 
@@ -26,14 +27,13 @@ func main() {
 	var scope string
 	var serviceaccount string
 
-	flag.StringVar(&kubeconfig, "kubeconfig", homeDir()+"/.kube/config", "(optional) absolute path to the kubeconfig file")
+	flag.StringVar(&kubeconfig, "k", homeDir()+"/.kube/config", "(optional) absolute path to the kubeconfig file")
 	flag.StringVar(&permission, "p", "view", "permission: view or admin")
-	flag.StringVar(&scope, "s", "test", "scope: cluster or name of  namespace")
-	flag.StringVar(&serviceaccount, "n", "scope+permission", "serviceaccount-name: name of serviceaccount")
+	flag.StringVar(&scope, "n", "test", "scope: cluster or name of  namespace")
+	flag.StringVar(&serviceaccount, "s", "scope+permission", "serviceaccount-name: name of serviceaccount")
 	flag.Parse()
 
-
-	if serviceaccount == "scope+permission"{
+	if serviceaccount == "scope+permission" {
 		serviceaccount = scope + "-" + permission
 	}
 
@@ -67,29 +67,30 @@ func main() {
 
 	host = strings.Replace(strings.Replace(config.Host, "http", "https", -1), "8080", "6443", -1)
 
-
-	//命名空间的view权限
 	if scope != "cluster" {
+		//命名空间的view权限
+		//创建sa
+		//创建rolebinding，已存在则patch
+		//获取sa的token
 		serviceaccountClient := clientset.CoreV1().ServiceAccounts(scope)
 
 		//check serviceaccount if exists
-		result, _:= serviceaccountClient.Get(serviceaccount,metav1.GetOptions{})
-		if result == nil {
+		_, err := serviceaccountClient.Get(serviceaccount, metav1.GetOptions{})
+		if err != nil {
 			serviceAccount := &corev1.ServiceAccount{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      serviceaccount,
 					Namespace: scope,
 				},
 			}
-			_,err = serviceaccountClient.Create(serviceAccount)
+			_, err = serviceaccountClient.Create(serviceAccount)
 		}
 
-
 		rolebindingClient := clientset.RbacV1().RoleBindings(scope)
-		rolebindingName := serviceaccount + "-" + permission
+		rolebindingName := serviceaccount + "-" + scope + "-" + permission
 
-		result1, _ := rolebindingClient.Get(rolebindingName, metav1.GetOptions{})
-		if result1 == nil {
+		_, err1 := rolebindingClient.Get(rolebindingName, metav1.GetOptions{})
+		if err1 != nil {
 			roleBinding := &rbacv1.RoleBinding{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: rolebindingName,
@@ -111,11 +112,14 @@ func main() {
 				panic(err.Error())
 			}
 
+		} else {
+			fmt.Println("rolebinding " + rolebindingName + " already exists,rolebinding patch not implemented")
+			os.Exit(1)
 		}
 
 		time.Sleep(1 * time.Second)
 
-		serviceAccount_New, err := clientset.CoreV1().ServiceAccounts(scope).Get(scope+"-"+permission, metav1.GetOptions{})
+		serviceAccount_New, err := clientset.CoreV1().ServiceAccounts(scope).Get(serviceaccount, metav1.GetOptions{})
 		if err != nil {
 			panic(err.Error())
 		} else {
@@ -127,7 +131,12 @@ func main() {
 			}
 		}
 
-	}else {
+	} else {
+		//集群的权限
+		//创建sa
+		//创建clusterrolebinding，已存在则patch
+		//获取sa的token
+
 		serviceaccountClient := clientset.CoreV1().ServiceAccounts("kube-system")
 		serviceAccount := &corev1.ServiceAccount{
 			ObjectMeta: metav1.ObjectMeta{
@@ -135,18 +144,19 @@ func main() {
 				Namespace: "kube-system",
 			},
 		}
-		result, err:= serviceaccountClient.Get(serviceaccount,metav1.GetOptions{})
-		if result == nil{
+		_, err := serviceaccountClient.Get(serviceaccount, metav1.GetOptions{})
+		if err != nil {
 			serviceaccountClient.Create(serviceAccount)
 		}
 
 		clusterrolebindingClient := clientset.RbacV1().ClusterRoleBindings()
+		clusterrolebindingName := serviceaccount + "-" + scope + "-" + permission
 
-		result1, err := clusterrolebindingClient.Get(serviceaccount,metav1.GetOptions{})
-		if result1 == nil{
+		_, err1 := clusterrolebindingClient.Get(clusterrolebindingName, metav1.GetOptions{})
+		if err1 != nil {
 			clusterroleBinding := &rbacv1.ClusterRoleBinding{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: serviceaccount,
+					Name: clusterrolebindingName,
 				},
 				RoleRef: rbacv1.RoleRef{
 					Kind: "ClusterRole",
@@ -160,20 +170,28 @@ func main() {
 				},
 			}
 
-			_,err := clusterrolebindingClient.Create(clusterroleBinding)
+			_, err := clusterrolebindingClient.Create(clusterroleBinding)
 			if err != nil {
 				panic(err.Error())
 			}
-		}
-		else{
-			result1.RoleRef
-			clusterrolebindingClient.Patch(serviceaccount,)
+
+		} else {
+			fmt.Println("clusterrolebinding " + clusterrolebindingName + " already exists,clusterrolebinding patch not implemented")
+			os.Exit(1)
+			//'{"subjects":[{"apiGroup":"rbac.authorization.k8s.io","kind": "Group","name": "system:masters"},{"apiGroup":"rbac.authorization.k8s.io","kind": "User","name": "cluster-admin"}]}'
+			//role := result.RoleRef
+			//subjects := result.Subjects
+			//
+			//fmt.Println(subjects)
+			//fmt.Println(role)
+
+			//clusterrolebindingClient.Patch(serviceaccount,types.JSONPatchType,)
 
 		}
 
 		time.Sleep(1 * time.Second)
 
-		serviceAccount_New, err := clientset.CoreV1().ServiceAccounts("kube-system").Get(scope+"-"+permission, metav1.GetOptions{})
+		serviceAccount_New, err := clientset.CoreV1().ServiceAccounts("kube-system").Get(serviceaccount, metav1.GetOptions{})
 		if err != nil {
 			panic(err.Error())
 		} else {
@@ -191,28 +209,28 @@ func main() {
 
 	newConfig := api.Config{
 		Clusters: map[string]*api.Cluster{
-			scope + "-" + permission: &api.Cluster{
+			"my-cluster": &api.Cluster{
 				CertificateAuthorityData: []byte(caCert),
 				Server:                   host,
 			},
 		},
 		AuthInfos: map[string]*api.AuthInfo{
-			scope + "-" + permission: &api.AuthInfo{
+			serviceaccount + "-" + scope + "-" + permission: &api.AuthInfo{
 				Token: token,
 			},
 		},
 		Contexts: map[string]*api.Context{
-			scope + "-" + permission: &api.Context{
-				Cluster:   scope + "-" + permission,
-				AuthInfo:  scope + "-" + permission,
+			"my-context": &api.Context{
+				Cluster:   "my-cluster",
+				AuthInfo:  serviceaccount + "-" + scope + "-" + permission,
 				Namespace: scope,
 			},
 		},
-		CurrentContext: scope + "-" + permission,
+		CurrentContext: "my-context",
 	}
 
 	clientcmd.WriteToFile(
-		newConfig, homeDir()+"/"+scope+"-"+permission+".config")
+		newConfig, homeDir()+"/"+serviceaccount+"-"+scope+"-"+permission+".config")
 
 	//for {
 	//	serviceAccounts, err := clientset.CoreV1().ServiceAccounts("kube-system").List(metav1.ListOptions{})
